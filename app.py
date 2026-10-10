@@ -11,16 +11,13 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 
-# Base path where all media libraries reside inside the container
-MEDIA_BASE = os.environ.get("MEDIA_BASE", "/media/movies")
-SOURCE_POOL = os.path.join(MEDIA_BASE, "all_downloads")
+MOVIES_BASE = os.environ.get("MOVIES_BASE", "/data/media/video/movies")
+TV_BASE = os.environ.get("TV_BASE", "/data/media/video/tv_shows")
 
 def sanitize_name(name: str) -> str:
-    """Sanitize usernames or folder names to prevent directory traversal."""
     return "".join(c for c in name if c.isalnum() or c in ("-", "_")).lower()
 
 def create_hardlinks_recursive(src: str, dst: str):
-    """Recursively creates directory structures and hardlinks files."""
     if os.path.isfile(src):
         if not os.path.exists(dst):
             os.link(src, dst)
@@ -42,61 +39,50 @@ def health():
 def webhook():
     data = request.get_json(silent=True)
     if not data:
-        logging.warning("Received invalid or non-JSON payload.")
         return jsonify({"error": "Invalid JSON"}), 400
 
-    # Jellyseerr sends 'MEDIA_AVAILABLE' notification type
     notification_type = data.get("notification_type")
     event = data.get("event")
     
-    # Check for availability events
     if notification_type != "MEDIA_AVAILABLE" and event != "media_available":
-        logging.info(f"Ignoring irrelevant event type: {notification_type or event}")
         return jsonify({"message": "Event ignored"}), 200
 
-    # Extract user and media details
-    request_user = data.get("request", {}).get("requestedBy_username")
+    request_user = data.get("request", {}).get("requestedBy_username") or data.get("requestedBy_username") or data.get("user", {}).get("username")
     if not request_user:
-        # Fallback to top-level fields depending on Jellyseerr webhook format
-        request_user = data.get("requestedBy_username") or data.get("user", {}).get("username")
-
-    if not request_user:
-        logging.error("Could not determine requesting user from payload.")
         return jsonify({"error": "Missing user"}), 400
 
+    media_type = data.get("media", {}).get("media_type", "movie").lower()
+    
+    if media_type == "tv":
+        base_dir = TV_BASE
+    else:
+        base_dir = MOVIES_BASE
+
+    source_pool = os.path.join(base_dir, "all_downloads")
     user_clean = sanitize_name(request_user)
-    target_user_dir = os.path.join(MEDIA_BASE, user_clean)
-
-    # Extract title or folder path
+    target_user_dir = os.path.join(base_dir, user_clean)
     subject = data.get("subject") or data.get("media", {}).get("title")
-    logging.info(f"Processing available media: '{subject}' for user: '{user_clean}'")
 
-    # Locate media in the source pool
-    if not os.path.exists(SOURCE_POOL):
-        logging.error(f"Source pool directory does not exist: {SOURCE_POOL}")
-        return jsonify({"error": "Source pool missing"}), 500
+    if not os.path.exists(source_pool):
+        return jsonify({"error": f"Source pool missing: {source_pool}"}), 500
 
-    # Match directory or file matching the title
     matched_entry = None
-    for entry in os.listdir(SOURCE_POOL):
+    for entry in os.listdir(source_pool):
         if subject and subject.lower() in entry.lower():
             matched_entry = entry
             break
 
     if not matched_entry:
-        logging.warning(f"No match found in {SOURCE_POOL} for '{subject}'. Scanning subfiles.")
         return jsonify({"warning": "No matching file found in pool"}), 404
 
-    src_path = os.path.join(SOURCE_POOL, matched_entry)
+    src_path = os.path.join(source_pool, matched_entry)
     dst_path = os.path.join(target_user_dir, matched_entry)
 
     try:
         os.makedirs(target_user_dir, exist_ok=True)
         create_hardlinks_recursive(src_path, dst_path)
-        logging.info(f"Successfully processed hardlinks for '{matched_entry}' to '{target_user_dir}'")
         return jsonify({"status": "success", "user": user_clean, "entry": matched_entry}), 200
     except OSError as e:
-        logging.error(f"Filesystem error during link creation: {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
