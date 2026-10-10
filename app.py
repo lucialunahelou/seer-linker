@@ -35,6 +35,7 @@ def create_hardlinks_recursive(src: str, dst: str):
 def health():
     return jsonify({"status": "healthy"}), 200
 
+# Endpoint for Seerr (Initial Requests)
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json(silent=True)
@@ -52,12 +53,7 @@ def webhook():
         return jsonify({"error": "Missing user"}), 400
 
     media_type = data.get("media", {}).get("media_type", "movie").lower()
-    
-    if media_type == "tv":
-        base_dir = TV_BASE
-    else:
-        base_dir = MOVIES_BASE
-
+    base_dir = TV_BASE if media_type == "tv" else MOVIES_BASE
     source_pool = os.path.join(base_dir, "all_downloads")
     user_clean = sanitize_name(request_user)
     target_user_dir = os.path.join(base_dir, user_clean)
@@ -85,6 +81,27 @@ def webhook():
     except OSError as e:
         return jsonify({"error": str(e)}), 500
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+# Endpoint for Sonarr (Future Episodes)
+@app.route("/sonarr", methods=["POST"])
+def sonarr_webhook():
+    data = request.get_json(silent=True)
+    if not data or data.get("eventType") != "Download":
+        return jsonify({"message": "Ignored"}), 200
+
+    series_title = data.get("series", {}).get("title")
+    if not series_title:
+        return jsonify({"error": "Missing series title"}), 400
+
+    source_pool = os.path.join(TV_BASE, "all_downloads")
+    source_series_dir = None
+    
+    if os.path.exists(source_pool):
+        for entry in os.listdir(source_pool):
+            if series_title.lower() in entry.lower():
+                source_series_dir = entry
+                break
+                
+    if not source_series_dir:
+        return jsonify({"error": "Series not found in pool"}), 404
+
+    src_path = os.path.join(source_pool, source_series_dir)
