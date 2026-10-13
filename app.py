@@ -105,3 +105,22 @@ def sonarr_webhook():
         return jsonify({"error": "Series not found in pool"}), 404
 
     src_path = os.path.join(source_pool, source_series_dir)
+    linked_users = []
+
+    try:
+        for user_dir in os.listdir(TV_BASE):
+            if user_dir == "all_downloads":
+                continue
+            
+            target_series_dir = os.path.join(TV_BASE, user_dir, source_series_dir)
+            
+            if os.path.exists(target_series_dir):
+                create_hardlinks_recursive(src_path, target_series_dir)
+                linked_users.append(user_dir)
+                
+        return jsonify({"status": "success", "linked_to": linked_users}), 200
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
