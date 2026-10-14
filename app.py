@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+import re
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -16,6 +17,18 @@ TV_BASE = os.environ.get("TV_BASE", "/data/media/video/tv_shows")
 
 def sanitize_name(name: str) -> str:
     return "".join(c for c in name if c.isalnum() or c in ("-", "_")).lower()
+
+def is_strict_match(title: str, folder_name: str) -> bool:
+    t_clean = title.lower().strip()
+    f_clean = folder_name.lower().strip()
+    
+    # Check for exact 1:1 match
+    if t_clean == f_clean:
+        return True
+        
+    # Check for exact match + standard Radarr/Sonarr year format e.g., "Title (2026)"
+    pattern = r"^" + re.escape(t_clean) + r"( \(\d{4}\))?$"
+    return bool(re.match(pattern, f_clean))
 
 def create_hardlinks_recursive(src: str, dst: str):
     if os.path.isfile(src):
@@ -64,7 +77,7 @@ def webhook():
 
     matched_entry = None
     for entry in os.listdir(source_pool):
-        if subject and subject.lower() in entry.lower():
+        if subject and is_strict_match(subject, entry):
             matched_entry = entry
             break
 
@@ -97,7 +110,7 @@ def sonarr_webhook():
     
     if os.path.exists(source_pool):
         for entry in os.listdir(source_pool):
-            if series_title.lower() in entry.lower():
+            if is_strict_match(series_title, entry):
                 source_series_dir = entry
                 break
                 
